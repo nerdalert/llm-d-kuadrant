@@ -1,0 +1,131 @@
+###############################################################################
+# 1.  API-KEY SECRETS  – now annotated with “free” or “premium”
+###############################################################################
+apiVersion: v1
+kind: Secret
+metadata:
+  name: premiumuser1-apikey
+  namespace: llm-d
+  labels:
+    kuadrant.io/auth-secret: "true"
+    app: llm-d-kuadrant
+  annotations:
+    # premium tier
+    kuadrant.io/groups: premium
+    secret.kuadrant.io/user-id: premiumuser1
+stringData:
+  api_key: premiumuser1_key
+type: Opaque
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: free1-apikey
+  namespace: llm-d
+  labels:
+    kuadrant.io/auth-secret: "true"
+    app: llm-d-kuadrant
+  annotations:
+    # free tier
+    kuadrant.io/groups: free
+    secret.kuadrant.io/user-id: freeuser1
+stringData:
+  api_key: freeuser1_key
+type: Opaque
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: free2-apikey
+  namespace: llm-d
+  labels:
+    kuadrant.io/auth-secret: "true"
+    app: llm-d-kuadrant
+  annotations:
+    kuadrant.io/groups: free
+    secret.kuadrant.io/user-id: freeuser2
+stringData:
+  api_key: freeuser2_key
+type: Opaque
+
+###############################################################################
+# 2.  AUTHPOLICY  – API-key auth on the Gateway
+###############################################################################
+---
+apiVersion: kuadrant.io/v1
+kind: AuthPolicy
+metadata:
+  name: llm-api-keys
+  namespace: llm-d
+spec:
+  targetRef:                      # ← binds to your Istio gateway
+    group: gateway.networking.k8s.io
+    kind: Gateway
+    name: llm-d-inference-gateway
+
+  rules:
+    authentication:
+      api-key-users:               # pick any rule name
+        apiKey:
+          allNamespaces: true
+          selector:                # match the two secrets above
+            matchLabels:
+              app: llm-d-kuadrant
+        credentials:
+          authorizationHeader:     # header looks like:  Authorization: APIKEY <key>
+            prefix: APIKEY
+    response:                      # expose the user-id AND groups into the identity object
+      success:
+        filters:
+          identity:
+            json:
+              properties:
+                userid:
+                  selector: auth.identity.metadata.annotations.secret\.kuadrant\.io/user-id
+                groups:
+                  selector: auth.identity.metadata.annotations.kuadrant\.io/groups
+
+    authorization:                 # (optional) only allow known tiers
+      allow-groups:
+        opa:
+          rego: |
+            groups := split(object.get(input.auth.identity.metadata.annotations, "kuadrant.io/groups", ""), ",")
+            allow { groups[_] == "free" }
+            allow { groups[_] == "premium" }
+
+###############################################################################
+# 3.  RATELIMITPOLICY  –  2 req/2 min for free, 10 req/2 min for premium
+###############################################################################
+---
+apiVersion: kuadrant.io/v1
+kind: RateLimitPolicy
+metadata:
+  name: basic-rate-limits
+  namespace: llm-d
+spec:
+  targetRef:
+    group: gateway.networking.k8s.io
+    kind: Gateway
+    name: llm-d-inference-gateway
+
+  limits:
+    # ----- FREE TIER: 2 requests / 2 min ------------------------------------ #
+    free-user-requests:
+      rates:
+        - limit: 2
+          window: 2m
+      when:
+        - predicate: |
+            auth.identity.groups.split(",").exists(g, g == "free")
+      counters:
+        - expression: auth.identity.userid
+    # ----- PREMIUM TIER: 10 requests / 2 min --------------------------------- #
+    premium-user-requests:
+      rates:
+        - limit: 10
+          window: 2m
+      when:
+        - predicate: |
+            auth.identity.groups.split(",").exists(g, g == "premium")
+      counters:
+        - expression: auth.identity.userid
