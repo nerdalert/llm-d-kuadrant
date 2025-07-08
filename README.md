@@ -12,8 +12,8 @@ This guide shows how to secure an LLM-d Istio Gateway with **API-key authenticat
 |-------------|----------------------------------------------------------------------------------|
 | Kubernetes  | 1.23+                                                                            |
 | Helm        | 3.9+                                                                             |
-| Gateway API | `gateway.networking.k8s.io/v1beta1` CRDs present                                 |
-| Istio       | Sidecar injection enabled on the Gateway namespace                               |
+| Gateway API | `gateway.networking.k8s.io/v1beta1` CRDs present (deployed with llm-d)           |
+| Istio       | Sidecar injection enabled on the Gateway namespace (deployed with llm-d)         |
 | llm-d       | [llm-d quickstart](https://github.com/llm-d/llm-d-deployer/tree/main/quickstart) |
 
 
@@ -202,7 +202,7 @@ kubectl apply -f kuadrant-rate-limit.yaml
 kubectl -n llm-d port-forward svc/llm-d-inference-gateway-istio 8000:80 &
 
 # Limitador admin / metrics → localhost:8080
-kubectl -n kuadrant-system port-forward svc/limitador 8080:8080 &
+kubectl -n kuadrant-system port-forward svc/limitador-limitador 8080:8080 &
 ```
 
 ---
