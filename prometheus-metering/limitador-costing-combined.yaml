@@ -1,0 +1,72 @@
+# llm-d-monitoring/limitador-servicemonitor.yaml
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: limitador
+  namespace: llm-d-monitoring           # ← Same namespace as Prometheus
+  labels:
+    release: prometheus
+    app.kubernetes.io/name: limitador
+    app.kubernetes.io/component: limitador
+spec:
+  # Still scrape the Service that lives in the kuadrant-system namespace
+  namespaceSelector:
+    matchNames:
+      - kuadrant-system
+  selector:
+    matchLabels:
+      app: limitador                    # matches Service’s only label
+  endpoints:
+    - port: http
+      path: /metrics
+      scheme: http
+      interval: 30s
+      scrapeTimeout: 10s
+---
+# llm-d-monitoring/limitador-costing-prometheus-rules.yaml
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: limitador-costing
+  namespace: llm-d-monitoring
+  labels:
+    release: prometheus
+    app.kubernetes.io/name: llmd
+    app.kubernetes.io/component: cost-metrics
+spec:
+  groups:
+    - name: llm-costing
+      interval: 30s
+      rules:
+        # ──────────────────────────────────────────────
+        # Constant price per *authorized* call (USD)
+        # ──────────────────────────────────────────────
+        - record: llmd_authorized_call_price_usd
+          expr: vector(0.002)         # <— adjust if you change your price
+
+        # ──────────────────────────────────────────────
+        # Rolling 24h total *authorized* calls
+        # ──────────────────────────────────────────────
+        - record: llmd_authorized_calls_24h_total
+          expr: |
+            increase(
+              authorized_calls{namespace="kuadrant-system"}[24h]
+            )
+
+        - record: llmd_request_cost_usd_24h_total
+          expr: |
+            llmd_authorized_calls_24h_total
+              * on() group_left(plan)
+                llmd_authorized_call_price_usd
+
+        # ──────────────────────────────────────────────
+        # Raw *authorized* calls counter
+        # ──────────────────────────────────────────────
+        - record: llmd_authorized_calls_total
+          expr: authorized_calls{namespace="kuadrant-system"}
+
+        # ──────────────────────────────────────────────
+        # Raw *limited* calls counter
+        # ──────────────────────────────────────────────
+        - record: llmd_authorized_calls_total
+          expr: limited_calls{namespace="kuadrant-system"}
