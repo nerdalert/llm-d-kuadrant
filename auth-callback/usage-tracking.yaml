@@ -1,3 +1,6 @@
+###############################################################################
+# 1 · DEPLOYMENT
+###############################################################################
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -14,25 +17,22 @@ spec:
     metadata:
       labels:
         app: usage-tracking
-      annotations:                       # Prometheus auto-scrape
+      annotations:
         prometheus.io/scrape: "true"
         prometheus.io/port:  "8080"
         prometheus.io/path:  "/metrics"
     spec:
       containers:
         - name: usage-tracking
-          # ⬇️  bump tag as you publish new versions
-          image: ghcr.io/nerdalert/usage-tracking:latest
+          image: ghcr.io/nerdalert/usage-tracking:latest   # ← bump tag as you publish
           imagePullPolicy: IfNotPresent
           ports:
             - containerPort: 8080
           env:
-            # Change to "debug" to see payload dumps
             - name: LOG_LEVEL
-              value: debug
-            # Set to "true" to enable /debug/pprof endpoints
+              value: debug          # set to "info" in prod
             - name: PPROF
-              value: "true"
+              value: "true"         # expose /debug/pprof
           readinessProbe:
             httpGet:
               path: /healthz
@@ -47,6 +47,9 @@ spec:
               cpu: 200m
               memory: 256Mi
 ---
+###############################################################################
+# 2 · SERVICE  – named port (“http”) so ServiceMonitor can target it
+###############################################################################
 apiVersion: v1
 kind: Service
 metadata:
@@ -58,6 +61,26 @@ spec:
   selector:
     app: usage-tracking
   ports:
-    - protocol: TCP
-      port: 80            # cluster-IP port
-      targetPort: 8080    # container port
+    - name: http             # ← NEW
+      protocol: TCP
+      port: 80               # cluster-IP port
+      targetPort: 8080       # container port
+---
+###############################################################################
+# 3 · SERVICEMONITOR – lets the Prometheus Operator scrape our /metrics
+###############################################################################
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: usage-tracking
+  namespace: llm-d-monitoring          # <— SAME namespace as the Prometheus CR
+spec:
+  namespaceSelector:
+    matchNames: ["llm-d"]              # tell Prometheus to scrape *llm-d* ns
+  selector:
+    matchLabels:
+      app: usage-tracking    # must match the Service label
+  endpoints:
+    - port: http             # must match the port name above
+      path: /metrics
+      interval: 15s

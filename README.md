@@ -4,7 +4,9 @@
 
 This guide shows how to secure an LLM-d Istio Gateway with **API-key authentication** and **per-tier rate limits** (free vs premium) demo using Kuadrant (Authorino + Limitador).
 
-See for [prometheus-metering](prometheus-metering/README.md) scraping metrics via Prometheus
+- See for [auth-callback](auth-callback/README.md) for an individual usage tracking service with an Authorino callback.
+- See for [prometheus-metering](prometheus-metering/README.md) scraping metrics via Prometheus
+
 ---
 
 ## 1 · Prerequisites

@@ -100,9 +100,6 @@ spec:
     # ---------- 4) callback ----------
     callbacks:
       usage-accounting:
-        # uncomment if I ever get logs ¯\_(ツ)_/¯:
-        # when:
-        #   - predicate: auth.authorization["allow-groups"].allowed == true
         http:
           url: http://usage-tracking.llm-d.svc.cluster.local/track
           method: POST
@@ -110,13 +107,12 @@ spec:
           body:
             expression: |
               {
-                "user":   auth.identity.metadata.annotations["secret\\.kuadrant\\.io/user-id"],
-                "groups": auth.identity.metadata.annotations["kuadrant\\.io/groups"],
-                "path":   request.http.path,
-                "host":   request.http.host,
-                "method": request.http.method
+                "user":   auth.identity.metadata.annotations["secret.kuadrant.io/user-id"],
+                "groups": auth.identity.metadata.annotations["kuadrant.io/groups"],
+                "path":   request.path,
+                "host":   request.host,
+                "method": request.method
               }
-
 
 ###############################################################################
 # 3.  RATELIMITPOLICY  –  2 req/2 min for free, 10 req/2 min for premium

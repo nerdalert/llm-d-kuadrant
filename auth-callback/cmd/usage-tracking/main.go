@@ -2,15 +2,22 @@
 //
 // Lightweight Prometheus-backed accounting service for Authorino callbacks.
 //
-// POST /track  – increments llm_requests_total{user,groups,path}
-// GET  /healthz – 204
-// GET  /metrics – Prometheus exposition
+// ┌─ ENDPOINTS ───────────────────────────────────────────────────────────────┐
+// │ POST /track   → increments llm_requests_total{user,groups,path}           │
+// │ GET  /healthz → 204 No Content                                            │
+// │ GET  /metrics → Prometheus exposition                                     │
+// │ (opt) /debug/pprof/* when PPROF=true                                       │
+// └───────────────────────────────────────────────────────────────────────────┘
 //
-// Env vars:
-//   PORT       (default 8080)
-//   LOG_LEVEL  info | debug | warn | error (default info)
-//   PPROF      true to expose /debug/pprof (default false)
-
+// ┌─ CONFIGURATION ───────────────────────────────────────────────────────────┐
+// │ The service is configured entirely via environment variables              │
+// │ (parsed with github.com/spf13/viper):                                     │
+// │   PORT       – listen port                 (default: 8080)                │
+// │   LOG_LEVEL  – debug | info | warn | error  (default: info)              │
+// │   PPROF      – true to expose /debug/pprof  (default: false)             │
+// └───────────────────────────────────────────────────────────────────────────┘
+//
+// © 2025 Brent • Apache-2.0
 package main
 
 import (
@@ -19,23 +26,29 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
-	_ "net/http/pprof" // active only if PPROF=true
+	_ "net/http/pprof" // only active if PPROF=true
 	"os"
 	"os/signal"
+	"strconv"
 	"time"
 
 	"github.com/oklog/ulid/v2"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
+	"github.com/spf13/viper"
 )
+
+// ──────────────────────────── Prometheus metric ──────────────────────────────
 
 var llmRequests = prometheus.NewCounterVec(
 	prometheus.CounterOpts{
 		Name: "llm_requests_total",
-		Help: "Successful LLM requests labelled by user, group and path.",
+		Help: "Successful LLM requests, labelled by user, group and path.",
 	},
 	[]string{"user", "groups", "path"},
 )
+
+// ──────────────────────────────── Payload ────────────────────────────────────
 
 type trackPayload struct {
 	User   string `json:"user"`
@@ -45,19 +58,16 @@ type trackPayload struct {
 	Method string `json:"method,omitempty"`
 }
 
-func getEnv(k, def string) string {
-	if v := os.Getenv(k); v != "" {
-		return v
-	}
-	return def
-}
+// ───────────────────────────── Utilities ─────────────────────────────────────
 
 func newReqID() string { return ulid.Make().String() }
 
+// ───────────────────────────── HTTP handlers ────────────────────────────────
+
 func trackHandler(log *slog.Logger) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		reqID := newReqID()
-		logger := log.With("req_id", reqID)
+		id := newReqID()
+		logger := log.With("req_id", id)
 
 		if r.Method != http.MethodPost {
 			http.Error(w, "POST only", http.StatusMethodNotAllowed)
@@ -87,12 +97,22 @@ func trackHandler(log *slog.Logger) http.HandlerFunc {
 	}
 }
 
-func healthHandler(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNoContent) }
+func healthHandler(w http.ResponseWriter, _ *http.Request) {
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// ──────────────────────────────── main ───────────────────────────────────────
 
 func main() {
-	// logging
+	// ── Configuration (viper) ───────────────────────────────────────────────
+	viper.AutomaticEnv()
+	viper.SetDefault("port", 8080)
+	viper.SetDefault("log_level", "info")
+	viper.SetDefault("pprof", "false")
+
+	// ── Logging (slog) ──────────────────────────────────────────────────────
 	level := slog.LevelInfo
-	switch getEnv("LOG_LEVEL", "info") {
+	switch viper.GetString("log_level") {
 	case "debug":
 		level = slog.LevelDebug
 	case "warn":
@@ -100,41 +120,46 @@ func main() {
 	case "error":
 		level = slog.LevelError
 	}
-	handler := slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: level})
-	log := slog.New(handler)
+	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: level}))
 
+	// ── Prometheus metric registration ──────────────────────────────────────
 	prometheus.MustRegister(llmRequests)
 
+	// ── Routing ─────────────────────────────────────────────────────────────
 	mux := http.NewServeMux()
-	mux.HandleFunc("/track", trackHandler(log))
+	mux.HandleFunc("/track", trackHandler(logger))
 	mux.Handle("/metrics", promhttp.Handler())
 	mux.HandleFunc("/healthz", healthHandler)
 
-	if getEnv("PPROF", "false") == "true" {
-		log.Info("pprof endpoints enabled at /debug/pprof")
+	if viper.GetString("pprof") == "true" {
+		logger.Info("pprof endpoints enabled at /debug/pprof")
+		// net/http/pprof is already registered in DefaultServeMux
 	}
 
-	server := &http.Server{
-		Addr:              ":" + getEnv("PORT", "8080"),
+	// ── Server setup & graceful shutdown ────────────────────────────────────
+	port := viper.GetInt("port")     // <- now used!
+	addr := ":" + strconv.Itoa(port) // ":8080" etc.
+	srv := &http.Server{
+		Addr:              addr,
 		Handler:           mux,
 		ReadHeaderTimeout: 5 * time.Second,
 		WriteTimeout:      5 * time.Second,
-		ErrorLog:          slog.NewLogLogger(handler, slog.LevelError),
+		ErrorLog:          slog.NewLogLogger(logger.Handler(), slog.LevelError),
 	}
 
 	go func() {
-		log.Info("usage-tracking listening", "addr", server.Addr, "level", level)
-		if err := server.ListenAndServe(); !errors.Is(err, http.ErrServerClosed) {
-			log.Error("server died", "err", err)
+		logger.Info("usage-tracking listening", "addr", addr, "level", level)
+		if err := srv.ListenAndServe(); !errors.Is(err, http.ErrServerClosed) {
+			logger.Error("server died", "err", err)
 		}
 	}()
 
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, os.Interrupt)
 	<-quit
-	log.Info("shutting down")
+	logger.Info("shutting down")
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	_ = server.Shutdown(ctx)
+	_ = srv.Shutdown(ctx)
 }
