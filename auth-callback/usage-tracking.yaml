@@ -1,0 +1,63 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: usage-tracking
+  namespace: llm-d
+  labels:
+    app: usage-tracking
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: usage-tracking
+  template:
+    metadata:
+      labels:
+        app: usage-tracking
+      annotations:                       # Prometheus auto-scrape
+        prometheus.io/scrape: "true"
+        prometheus.io/port:  "8080"
+        prometheus.io/path:  "/metrics"
+    spec:
+      containers:
+        - name: usage-tracking
+          # ⬇️  bump tag as you publish new versions
+          image: ghcr.io/nerdalert/usage-tracking:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8080
+          env:
+            # Change to "debug" to see payload dumps
+            - name: LOG_LEVEL
+              value: debug
+            # Set to "true" to enable /debug/pprof endpoints
+            - name: PPROF
+              value: "true"
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 8080
+            initialDelaySeconds: 2
+            periodSeconds: 5
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 200m
+              memory: 256Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: usage-tracking
+  namespace: llm-d
+  labels:
+    app: usage-tracking
+spec:
+  selector:
+    app: usage-tracking
+  ports:
+    - protocol: TCP
+      port: 80            # cluster-IP port
+      targetPort: 8080    # container port
